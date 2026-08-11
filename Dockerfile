@@ -20,6 +20,7 @@ COPY database.py .
 COPY rss.py .
 COPY scraper.py .
 COPY scheduler.py .
+COPY notifier.py .
 
 # Create directories for data and logs
 RUN mkdir -p data logs

@@ -1,0 +1,52 @@
+{
+  "sources": [
+    {
+      "name": "TechNext24",
+      "url": "https://technext24.com/",
+      "type": "website",
+      "category": "Technology",
+      "enabled": true,
+      "rss_url": "https://technext24.com/feed/"
+    },
+    {
+      "name": "Today Africa",
+      "url": "https://todayafrica.co/",
+      "type": "website",
+      "category": "News",
+      "enabled": true,
+      "rss_url": null
+    },
+    {
+      "name": "CNBC Africa",
+      "url": "https://www.cnbcafrica.com/",
+      "type": "website",
+      "category": "Business",
+      "enabled": true,
+      "rss_url": "https://www.cnbcafrica.com/feed/"
+    },
+    {
+      "name": "Cryptopolitan",
+      "url": "https://www.cryptopolitan.com/",
+      "type": "website",
+      "category": "Cryptocurrency",
+      "enabled": true,
+      "rss_url": "https://www.cryptopolitan.com/feed/"
+    }
+  ],
+  "parsing_rules": {
+    "default": {
+      "article_selector": "article, .post, .entry",
+      "title_selector": "h1, h2, .title, .headline",
+      "link_selector": "a[href]",
+      "date_selector": "time, .date, .published",
+      "summary_selector": "p, .excerpt, .summary",
+      "image_selector": "img[src]"
+    }
+  },
+  "notification_settings": {
+    "send_images": true,
+    "max_summary_length": 500,
+    "batch_notifications": false,
+    "notification_template": "📰 New Article\n\nSource: {source}\nTitle: {title}\nPublished: {date}\nSummary: {summary}\n\nRead more: {url}"
+  }
+}

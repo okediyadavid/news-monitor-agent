@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  news-monitor:
+    build: .
+    container_name: news-monitor-agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.json:/app/config.json
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CHECK_INTERVAL_HOURS=${CHECK_INTERVAL_HOURS:-6}
+      - DATABASE_PATH=data/news_monitor.db
+      - LOG_FILE=logs/news_monitor.log
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('data/news_monitor.db')"]
+      interval: 1h
+      timeout: 10s
+      retries: 3
+      start_period: 30s

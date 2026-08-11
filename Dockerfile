@@ -15,13 +15,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY app.py .
+COPY bot.py .
 COPY database.py .
 COPY rss.py .
 COPY scraper.py .
-COPY notifier.py .
 COPY scheduler.py .
-COPY config.json .
 
 # Create directories for data and logs
 RUN mkdir -p data logs
@@ -37,4 +35,4 @@ ENV LOG_LEVEL=INFO
 VOLUME ["/app/data", "/app/logs"]
 
 # Run the application
-CMD ["python", "app.py"]
+CMD ["python", "bot.py"]

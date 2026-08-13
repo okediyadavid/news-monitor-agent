@@ -10,8 +10,10 @@ import time
 import hashlib
 import os
 import re
+import threading
 from typing import Optional, Dict, Any
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from database import DatabaseManager
 from scraper import WebScraper
@@ -20,6 +22,20 @@ from notifier import TelegramNotifier
 from scheduler import NewsScheduler
 
 logger = logging.getLogger(__name__)
+
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Simple HTTP handler for health checks."""
+    
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'OK')
+    
+    def log_message(self, format, *args):
+        """Suppress default logging."""
+        pass
 
 
 class NewsBot:
@@ -2153,7 +2169,7 @@ Next Run: {job_info.get('next_run_time', 'N/A')}"""
             return None
     
     def run(self) -> None:
-        """Start the bot polling loop."""
+        """Start the bot polling loop with HTTP health check server."""
         logger.info("Starting Telegram bot polling...")
         
         # Start the scheduler
@@ -2162,6 +2178,13 @@ Next Run: {job_info.get('next_run_time', 'N/A')}"""
             logger.info("Scheduler started")
         except Exception as e:
             logger.error(f"Failed to start scheduler: {e}")
+        
+        # Start HTTP server for health checks in background thread
+        port = int(os.environ.get('PORT', 10000))
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        logger.info(f"Health check server started on port {port}")
         
         while True:
             try:
@@ -2195,6 +2218,7 @@ Next Run: {job_info.get('next_run_time', 'N/A')}"""
             except KeyboardInterrupt:
                 logger.info("Bot stopped by user")
                 self.scheduler.stop()
+                server.shutdown()
                 break
             except Exception as e:
                 logger.error(f"Error in polling loop: {e}")

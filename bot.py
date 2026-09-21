@@ -20,6 +20,7 @@ from scraper import WebScraper
 from rss import RSSParser
 from notifier import TelegramNotifier
 from scheduler import NewsScheduler
+from ai_service import AIService
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,9 @@ class NewsBot:
         # Initialize scheduler (default 6 hours)
         self.scheduler = NewsScheduler(check_interval_hours=6)
         self.scheduler.set_check_function(self._scheduled_check)
+        
+        # Initialize AI service
+        self.ai_service = AIService(model="llama2", host="http://localhost:11434")
         
         self._initialize_preconfigured_sources()
     
@@ -238,6 +242,14 @@ class NewsBot:
             self.summarize_command(chat_id, args)
         elif command == 'cancel':
             self.cancel_command(chat_id)
+        elif command == 'ai':
+            self.ai_chat_command(chat_id, args)
+        elif command == 'aisummarize':
+            self.ai_summarize_command(chat_id, args)
+        elif command == 'aianalyze':
+            self.ai_analyze_command(chat_id)
+        elif command == 'aistatus':
+            self.ai_status_command(chat_id)
         elif command == 'interest':
             self.interest_command(chat_id, args)
         elif command == 'myinterests':
@@ -404,12 +416,54 @@ class NewsBot:
     def _handle_ai_question(self, chat_id: int, question: str) -> None:
         """Handle AI-powered questions about news and articles."""
         try:
+            # Try Ollama first
+            if self.ai_service.is_available():
+                # Get recent articles for context
+                user = self._get_user_by_chat_id(chat_id)
+                if not user:
+                    self.send_message(chat_id, "❌ Please register first")
+                    return
+                
+                with self.db._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT a.*, s.name as source_name 
+                        FROM articles a 
+                        JOIN sources s ON a.source_id = s.id 
+                        WHERE a.user_id = ?
+                        ORDER BY a.created_at DESC
+                        LIMIT 10
+                    """, (user['id'],))
+                    
+                    articles = [dict(row) for row in cursor.fetchall()]
+                
+                if not articles:
+                    self.send_message(chat_id, "🤔 I don't have any articles to analyze yet. Try checking for news first with 'show news'")
+                    return
+                
+                # Prepare context for AI
+                context = "Here are recent news articles:\n\n"
+                for i, article in enumerate(articles[:5], 1):
+                    context += f"{i}. {article['title']}\n"
+                    context += f"   Source: {article['source_name']}\n"
+                    if article.get('summary'):
+                        context += f"   Summary: {article['summary']}\n"
+                    context += "\n"
+                
+                context += f"\nUser question: {question}"
+                
+                # Use Ollama
+                answer = self.ai_service.chat(context)
+                self.send_message(chat_id, f"🤖 AI Answer:\n\n{answer}")
+                return
+            
+            # Fallback to OpenAI
             import os
             openai_api_key = os.getenv('OPENAI_API_KEY')
             
             if not openai_api_key:
                 # Fallback to search if no AI available
-                self.send_message(chat_id, "🤔 I'd love to answer that with AI, but no AI API key is configured. Let me search for related articles instead...")
+                self.send_message(chat_id, "🤔 I'd love to answer that with AI, but Ollama is not running (ollama serve) and no OpenAI API key is configured. Let me search for related articles instead...")
                 self.search_command(chat_id, question.split())
                 return
             
@@ -472,11 +526,50 @@ class NewsBot:
     def _ai_summarize_articles(self, chat_id: int, article_ids: list) -> None:
         """Use AI to intelligently summarize multiple articles."""
         try:
+            # Try Ollama first
+            if self.ai_service.is_available():
+                user = self._get_user_by_chat_id(chat_id)
+                if not user:
+                    self.send_message(chat_id, "❌ Please register first")
+                    return
+                
+                # Get articles
+                with self.db._get_connection() as conn:
+                    cursor = conn.cursor()
+                    placeholders = ','.join(['?' for _ in article_ids])
+                    cursor.execute(f"""
+                        SELECT a.*, s.name as source_name 
+                        FROM articles a 
+                        JOIN sources s ON a.source_id = s.id 
+                        WHERE a.id IN ({placeholders}) AND a.user_id = ?
+                    """, article_ids + [user['id']])
+                    
+                    articles = [dict(row) for row in cursor.fetchall()]
+                
+                if not articles:
+                    self.send_message(chat_id, "❌ No articles found to summarize")
+                    return
+                
+                # Prepare context for AI
+                context = "Please provide a concise summary of these news articles, highlighting key themes and connections:\n\n"
+                for i, article in enumerate(articles, 1):
+                    context += f"{i}. {article['title']}\n"
+                    context += f"   Source: {article['source_name']}\n"
+                    if article.get('summary'):
+                        context += f"   Summary: {article['summary']}\n"
+                    context += "\n"
+                
+                # Use Ollama
+                summary = self.ai_service.chat(context)
+                self.send_message(chat_id, f"📝 AI Summary:\n\n{summary}")
+                return
+            
+            # Fallback to OpenAI
             import os
             openai_api_key = os.getenv('OPENAI_API_KEY')
             
             if not openai_api_key:
-                self.send_message(chat_id, "🤔 AI summarization requires an OpenAI API key. Add OPENAI_API_KEY to your .env file.")
+                self.send_message(chat_id, "🤔 AI summarization requires Ollama to be running (ollama serve) or an OpenAI API key. Add OPENAI_API_KEY to your .env file.")
                 return
             
             user = self._get_user_by_chat_id(chat_id)
@@ -679,6 +772,12 @@ Export
 
 Trending
 /trending - View trending topics
+
+AI Features (Ollama/Local LLM)
+/ai message - Chat with AI (uses local Llama model)
+/aisummarize text - Summarize text with AI
+/aianalyze - Analyze your recent articles with AI
+/aistatus - Check AI service status
 
 AI Features (requires OPENAI_API_KEY)
 /summarize - AI-powered article summarization
@@ -2148,7 +2247,16 @@ Next Run: {job_info.get('next_run_time', 'N/A')}"""
             self.send_message(chat_id, f"❌ Error generating document: {str(e)}")
     
     def _generate_ai_summary(self, title: str, summary: str) -> str:
-        """Generate AI summary using OpenAI."""
+        """Generate AI summary using OpenAI or Ollama."""
+        # Try Ollama first
+        if self.ai_service.is_available():
+            try:
+                text = f"Title: {title}\n\nSummary: {summary}"
+                return self.ai_service.summarize(text, max_length=200)
+            except Exception as e:
+                logger.error(f"Error generating AI summary with Ollama: {e}")
+        
+        # Fallback to OpenAI
         try:
             import openai
             openai.api_key = os.getenv('OPENAI_API_KEY')
@@ -2167,6 +2275,109 @@ Next Run: {job_info.get('next_run_time', 'N/A')}"""
         except Exception as e:
             logger.error(f"Error generating AI summary: {e}")
             return None
+    
+    def ai_chat_command(self, chat_id: int, args: list) -> None:
+        """Handle /ai command to chat with AI."""
+        if not args:
+            self.send_message(chat_id, "Usage: /ai your message here\n\nExample: /ai What are the latest trends in fintech?")
+            return
+        
+        message = ' '.join(args)
+        
+        if not self.ai_service.is_available():
+            self.send_message(chat_id, "❌ AI service is not available. Please make sure Ollama is running with: ollama serve")
+            return
+        
+        self.send_message(chat_id, "🤖 Thinking...")
+        
+        try:
+            response = self.ai_service.chat(message)
+            self.send_message(chat_id, f"🤖 AI Response:\n\n{response}")
+        except Exception as e:
+            logger.error(f"Error in AI chat: {e}")
+            self.send_message(chat_id, f"❌ Error: {str(e)}")
+    
+    def ai_summarize_command(self, chat_id: int, args: list) -> None:
+        """Handle /aisummarize command to summarize text."""
+        if not args:
+            self.send_message(chat_id, "Usage: /aisummarize your text here\n\nExample: /aisummarize Uber exits Nigeria after 12 years, saying the market is too competitive...")
+            return
+        
+        text = ' '.join(args)
+        
+        if not self.ai_service.is_available():
+            self.send_message(chat_id, "❌ AI service is not available. Please make sure Ollama is running with: ollama serve")
+            return
+        
+        self.send_message(chat_id, "🤖 Summarizing...")
+        
+        try:
+            summary = self.ai_service.summarize(text, max_length=200)
+            self.send_message(chat_id, f"📝 Summary:\n\n{summary}")
+        except Exception as e:
+            logger.error(f"Error in AI summarize: {e}")
+            self.send_message(chat_id, f"❌ Error: {str(e)}")
+    
+    def ai_analyze_command(self, chat_id: int) -> None:
+        """Handle /aianalyze command to analyze recent articles."""
+        user = self._get_user_by_chat_id(chat_id)
+        if not user:
+            self.send_message(chat_id, "❌ Please register first with /register your@email.com")
+            return
+        
+        if not self.ai_service.is_available():
+            self.send_message(chat_id, "❌ AI service is not available. Please make sure Ollama is running with: ollama serve")
+            return
+        
+        self.send_message(chat_id, "🤖 Fetching and analyzing your recent articles...")
+        
+        try:
+            # Get recent articles from the last 24 hours
+            from datetime import datetime, timedelta
+            yesterday = datetime.now() - timedelta(hours=24)
+            
+            articles = self.db.get_user_articles(
+                user['id'],
+                start_date=yesterday.strftime('%Y-%m-%d'),
+                limit=10
+            )
+            
+            if not articles:
+                self.send_message(chat_id, "❌ No recent articles found to analyze.")
+                return
+            
+            # Format articles for AI
+            article_data = [
+                {
+                    'title': article['title'],
+                    'content': article['summary'] or article['title']
+                }
+                for article in articles
+            ]
+            
+            analysis = self.ai_service.analyze_articles(article_data)
+            self.send_message(chat_id, f"📊 Analysis of your recent articles:\n\n{analysis}")
+            
+        except Exception as e:
+            logger.error(f"Error in AI analyze: {e}")
+            self.send_message(chat_id, f"❌ Error: {str(e)}")
+    
+    def ai_status_command(self, chat_id: int) -> None:
+        """Handle /aistatus command to check AI service status."""
+        available = self.ai_service.is_available()
+        models = self.ai_service.list_models()
+        
+        if available:
+            message = f"✅ AI Service Status: ONLINE\n\n"
+            message += f"🤖 Model: {self.ai_service.model}\n"
+            message += f"📋 Available models: {', '.join(models) if models else 'None'}\n"
+            message += f"🌐 Host: {self.ai_service.host}"
+        else:
+            message = f"❌ AI Service Status: OFFLINE\n\n"
+            message += f"Please make sure Ollama is running with: ollama serve\n"
+            message += f"Then pull a model with: ollama pull llama3.2"
+        
+        self.send_message(chat_id, message)
     
     def run(self) -> None:
         """Start the bot polling loop with HTTP health check server."""

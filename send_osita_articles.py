@@ -1,7 +1,6 @@
 import os
 import sqlite3
 import requests
-import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -10,44 +9,35 @@ load_dotenv()
 bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
 api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
-# Get all users
+# Get Osita's user info
 conn = sqlite3.connect('data/news_monitor.db')
 cursor = conn.cursor()
 
-cursor.execute('SELECT id, name, telegram_chat_id FROM users')
-users = cursor.fetchall()
+cursor.execute('SELECT id, name, telegram_chat_id FROM users WHERE name = "Osita Nwana"')
+user = cursor.fetchone()
 
-print(f"Found {len(users)} users")
-print("=" * 60)
-
-# Get articles from past 7 days
-today = datetime.now()
-seven_days_ago = today - timedelta(days=7)
-
-for user in users:
-    user_id = user[0]
-    user_name = user[1]
-    chat_id = user[2]
+if user:
+    user_id, user_name, chat_id = user
+    print(f"Processing {user_name}...")
     
-    print(f"\nProcessing {user_name}...")
-    
-    # Get articles from the past 7 days
+    # Get latest 10 articles
     cursor.execute('''
         SELECT a.*, s.name as source_name 
         FROM articles a 
         JOIN sources s ON a.source_id = s.id 
-        WHERE a.user_id = ? AND a.created_at >= ?
+        WHERE a.user_id = ?
         ORDER BY a.created_at DESC
-    ''', (user_id, seven_days_ago.isoformat()))
+        LIMIT 10
+    ''', (user_id,))
     
     articles = cursor.fetchall()
     
-    print(f"  Found {len(articles)} articles from past 7 days")
+    print(f"  Found {len(articles)} recent articles")
     
     if articles:
         # Send header message
-        header_message = f"📰 **Latest Articles** ({len(articles)} articles)\n\n"
-        header_message += f"Here are your latest news articles:"
+        header_message = f"📰 **Today's Articles** ({len(articles)} articles)\n\n"
+        header_message += f"Here are your latest news articles for today:"
         
         data = {'chat_id': chat_id, 'text': header_message}
         response = requests.post(api_url, json=data)
@@ -58,6 +48,7 @@ for user in users:
         else:
             print(f"  ❌ Error sending header: {result}")
         
+        import time
         time.sleep(1)
         
         # Send articles
@@ -89,9 +80,8 @@ for user in users:
             
             time.sleep(1)
     else:
-        print(f"  No recent articles found")
+        print(f"  No articles found for today")
+else:
+    print("❌ User Osita Nwana not found")
 
 conn.close()
-
-print("\n" + "=" * 60)
-print("✅ Latest articles sent to all users")
